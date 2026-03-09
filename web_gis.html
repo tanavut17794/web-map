@@ -1,0 +1,350 @@
+<!-- 1. วาดโครงสร้าง html -->
+
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web GIS Training</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.css" />
+    <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.min.js"></script>
+
+    <style>
+        /* ส่วนการจัดหน้าจอ (Layout Styling) */
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+            display: flex;
+        }
+
+        /* พื้นที่แสดงผลแผนที่หลัก */
+        #map {
+            flex-grow: 1;
+            height: 100vh;
+        }
+
+        /* Sidebar สำหรับเก็บเครื่องมือควบคุมชั้นข้อมูล */
+        #sidebar {
+            width: 320px;
+            height: 100vh;
+            background: #fff;
+            border-right: 1px solid #ddd;
+            z-index: 2000;
+            overflow-y: auto;
+            transition: 0.3s;
+            flex-shrink: 0;
+        }
+
+        #sidebar.collapsed {
+            margin-left: -320px;
+        }
+
+        .panel-content {
+            padding: 20px;
+        }
+
+        .layer-group {
+            margin-bottom: 25px;
+            clear: both;
+        }
+
+        /* หัวข้อกลุ่ม Layer ใน Sidebar */
+        .section-title {
+            font-weight: bold;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 5px;
+            margin-bottom: 10px;
+            display: block;
+            color: #2c3e50;
+        }
+
+        /* ขยับปุ่ม Geoman (เครื่องมือวาด) ลงมาเล็กน้อยเพื่อไม่ให้ซ้อนทับกับปุ่มเมนูของเรา */
+        .leaflet-top.leaflet-left {
+            margin-top: 60px !important;
+        }
+
+        /* ปรับสไตล์ Layer Control ของ Leaflet ให้มาแสดงเป็นรายการใน Sidebar */
+        .leaflet-control-layers {
+            position: relative !important;
+            float: none !important;
+            box-shadow: none !important;
+            border: none !important;
+            margin: 0 !important;
+            display: block !important;
+        }
+
+        /* ปุ่ม Hamburger สำหรับเปิด-ปิดแถบเมนูด้านซ้าย */
+        #toggle-btn {
+            position: absolute;
+            top: 10px;
+            left: 330px;
+            z-index: 2001;
+            padding: 10px 15px;
+            background: white;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        /* ปุ่มสีเขียวสำหรับส่งออกไฟล์ข้อมูล */
+        .export-btn {
+            width: 100%;
+            padding: 12px;
+            background: #27ae60;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+            border-radius: 4px;
+        }
+
+    </style>
+
+</head>
+
+<body>
+
+    <div id="sidebar">
+        <div class="panel-content">
+            <h2 style="margin-top: 0;">GIS Tools</h2>
+
+            <div class="layer-group">
+                <div class="section-title">1. Basemap Layers</div>
+                <div id="basemap-ctrl"></div>
+            </div>
+
+            <div class="layer-group">
+                <div class="section-title">2. WMS Layers</div>
+                <div id="wms-ctrl"></div>
+            </div>
+
+            <div class="layer-group">
+                <div class="section-title">3. GeoJSON Data</div>
+                <input type="file" id="fileInput" accept=".geojson">
+                <div id="geojson-ctrl"></div>
+            </div>
+
+            <div class="layer-group">
+                <div class="section-title">Drawing Tools</div>
+                <button class="export-btn" onclick="exportGeoJSON()">📥 Export GeoJSON</button>
+            </div>
+        </div>
+    </div>
+
+    <button id="toggle-btn" onclick="toggleSidebar()">☰ Layers</button>
+
+    <div id="map"></div>
+
+    <script>
+
+        // [ขั้นตอนที่ 2] การสร้างแผนที่และการจัดการลำดับชั้น (Map & Z-Index)
+        // 2.1 กำหนดค่าเริ่มต้นแผนที่ (พิกัดกรุงเทพฯ, ซูมระดับ 6)
+        const map = L.map('map').setView([13.75, 100.5], 6);
+
+        // 2.2 สร้าง 'Pane' พิเศษสำหรับข้อมูล Vector เพื่อบังคับให้ข้อมูลจุด/เส้น/พื้นที่ อยู่ทับข้อมูลภาพ (WMS) เสมอ
+        map.createPane('vectorPane');
+        map.getPane('vectorPane').style.zIndex = 650; // ค่ามาตรฐานของภาพคือ 200-400, เราจึงตั้ง 650
+        map.getPane('vectorPane').style.pointerEvents = 'none'; // ป้องกันการบังการคลิกของ Layer อื่น
+
+        // [ขั้นตอนที่ 3] การจัดการแผนที่ฐาน (Basemaps)
+        const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap'
+        }).addTo(map); // แสดง OSM เป็นค่าเริ่มต้น
+
+        const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: '© Esri'
+        });
+
+        // รวบรวม Basemap ไว้ใน Object เดียวเพื่อใช้กับ Control
+        const baseMaps = { "OpenStreetMap": osm, "Satellite Imagery": satellite };
+
+                // [ขั้นตอนที่ 4] การจัดการข้อมูล WMS (Web Map Service)
+        // 4.1 ข้อมูลการใช้ประโยชน์ที่ดินจาก ESA
+        const landCover = L.tileLayer.wms("https://services.terrascope.be/wms/v2?", {
+            layers: 'WORLDCOVER_2020_MAP', format: 'image/png', transparent: true
+        });
+        // 4.2 ข้อมูลภูมิประเทศโลกจาก GMRT
+        const gmrt = L.tileLayer.wms("https://www.gmrt.org/services/mapserver/wms_merc?", {
+            layers: 'gmrt', format: 'image/png', transparent: true
+        });
+
+        const wmsLayers = { "Land Cover (ESA)": landCover, "Topography (GMRT)": gmrt };
+
+        // 4.3 เทคนิคการจัดการลำดับภาพ: เมื่อเปิดชั้นข้อมูลใหม่ ให้ขยับมาอยู่ด้านหน้าสุดของกลุ่มภาพ
+        map.on('overlayadd', function (e) {
+            if (e.layer instanceof L.TileLayer.WMS) {
+                e.layer.bringToFront();
+            }
+        });
+
+        // [ขั้นตอนที่ 5] การจัดการข้อมูล GeoJSON และการนำเข้าไฟล์
+        // 5.1 สร้างกลุ่มว่างสำหรับเก็บชั้นข้อมูลที่ผู้ใช้นำเข้า
+        const geojsonGroup = L.layerGroup().addTo(map);
+        const geojsonLayer = { "Show Imported File": geojsonGroup };
+
+        // 5.2 ฟังก์ชันสำหรับย้ายเครื่องมือควบคุมของ Leaflet ไปใส่ไว้ใน Sidebar ของเรา
+        function mountControl(layers, containerId, isBase = false) {
+            const ctrl = isBase ? L.control.layers(layers, null, { collapsed: false }) : L.control.layers(null, layers, { collapsed: false });
+            ctrl.addTo(map);
+            document.getElementById(containerId).appendChild(ctrl.getContainer());
+        }
+
+        // ติดตั้งตัวเลือก Layer ลงในช่องที่เราเตรียมไว้ใน Sidebar
+        mountControl(baseMaps, 'basemap-ctrl', true);
+        mountControl(wmsLayers, 'wms-ctrl');
+        mountControl(geojsonLayer, 'geojson-ctrl');
+
+
+        // 5.3 ฟังก์ชันสลับสถานะ Sidebar (เปิด/ซ่อน)
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const btn = document.getElementById('toggle-btn');
+            sidebar.classList.toggle('collapsed');
+            // ปรับตำแหน่งปุ่ม Toggle ตาม Sidebar
+            btn.style.left = sidebar.classList.contains('collapsed') ? '10px' : '330px';
+            // สั่งให้แผนที่คำนวณขนาดพื้นที่ใหม่หลังจาก Sidebar เลื่อน เพื่อป้องกันแผนที่แหว่ง
+            setTimeout(() => { map.invalidateSize(); }, 300);
+        }
+
+        // 5.4 ฟังก์ชันประมวลผลการอ่านไฟล์ GeoJSON จากเครื่องผู้ใช้
+        document.getElementById('fileInput').addEventListener('change', function (e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function (event) {
+                try {
+                    const data = JSON.parse(event.target.result); // แปลงข้อความในไฟล์เป็น JSON Object
+                    geojsonGroup.clearLayers(); // ล้างข้อมูลเก่าออกก่อน
+
+                    // สร้างชั้นข้อมูลใหม่และกำหนดให้อยู่ใน 'vectorPane' ที่เราสร้างไว้ในขั้นตอนที่ 2
+                    const layer = L.geoJSON(data, {
+                        style: { color: '#e67e22', weight: 3, fillOpacity: 0.4 },
+                        pane: 'vectorPane'
+                    }).addTo(geojsonGroup);
+
+                    map.fitBounds(layer.getBounds()); // ขยายแผนที่ไปยังขอบเขตของข้อมูลที่นำเข้า
+                } catch (err) { alert("ไฟล์ไม่ใช่ GeoJSON ที่ถูกต้อง"); }
+            };
+            reader.readAsText(file);
+        });
+
+    // [ขั้นตอนที่ 6] ระบบการวาดและการส่งออกข้อมูล (Geoman & Data Export)
+        // 6.1 ติดตั้งเครื่องมือวาดบนมุมซ้ายบนของแผนที่
+        map.pm.addControls({
+            position: 'topleft',
+            drawCircleMarker: false,
+            rotateMode: false
+        });
+
+        // 6.2 เมื่อมีการสร้างวัตถุใหม่เสร็จสิ้น ให้ยกมาไว้หน้าสุดเสมอ
+        map.on('pm:create', function (e) {
+            e.layer.bringToFront();
+        });
+
+        // 6.3 ฟังก์ชันรวบรวมสิ่งที่วาดทั้งหมดแล้วแปลงเป็นไฟล์ดาวน์โหลด
+        function exportGeoJSON() {
+            // ดึงข้อมูล Geoman Layers ออกมาในรูปแบบมาตรฐาน GeoJSON
+            const data = map.pm.getGeomanLayers(true).toGeoJSON();
+            if (data.features.length === 0) return alert("กรุณาวาดรูปทรงบนแผนที่ก่อนส่งออกครับ");
+
+            // สร้างไฟล์จำลอง (Blob) และสั่งให้บราวเซอร์ดาวน์โหลดออกไป
+            const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = "my_map_data.geojson"; // ตั้งชื่อไฟล์เริ่มต้น
+            a.click(); // จำลองการคลิกเพื่อดาวน์โหลด
+        }
+
+        // 7. การเพิ่มหมุด
+        // ฟังก์ชันสร้างหมุด
+        function createMarker(color) {
+
+            return L.divIcon({
+                className: "",
+                iconSize: [30, 42],
+                iconAnchor: [15, 42],
+                html: `
+        <svg width="30" height="42" viewBox="0 0 24 36">
+          <path d="M12 0C6 0 1 5 1 11c0 8 11 24 11 24s11-16 11-24C23 5 18 0 12 0z"
+                fill="${color}" stroke="black" stroke-width="1"/>
+          <circle cx="12" cy="11" r="4" fill="white"/>
+        </svg>
+        `
+            });
+
+        }
+
+        // เพิ่ม marker 1
+        var marker_a = L.marker([15.00000, 100.000000], {
+            icon: createMarker("red")
+        }).addTo(map);
+
+        // popup
+        marker_a.bindPopup(
+            "<b>ชื่อสถานที่:</b> จุดตัวอย่าง <br>" +
+            "<b>รายละเอียด:</b> พิกัด 15,100" +
+            "<img src='https://i.pinimg.com/736x/31/4f/2d/314f2de4d4b2f6f93d0f0bde7e60807a.jpg' width='200'>"
+        );
+
+        // เพิ่ม marker 2
+        var marker_a = L.marker([13.585000, 100.721000], {
+            icon: createMarker("blue")
+        }).addTo(map);
+
+        // popup
+        marker_a.bindPopup(
+            "<b>ชื่อสถานที่:</b> ภาคกลาง <br>" +
+            "<b>รายละเอียด:</b> พิกัด 13.585,100.721"+
+            "<img src='https://www.kaohoon.com/wp-content/uploads/2022/11/2022-11-23_%E0%B9%81%E0%B8%9A%E0%B9%88%E0%B8%87%E0%B9%80%E0%B8%84%E0%B9%89%E0%B8%81%E0%B8%A5%E0%B8%87%E0%B8%95%E0%B8%B1%E0%B8%A7-%E0%B8%A2%E0%B8%B4%E0%B8%87%E0%B8%AA%E0%B8%94%E0%B8%9A%E0%B8%AD%E0%B8%A5%E0%B9%82%E0%B8%A5%E0%B8%81.jpg' width='200'>"
+        );
+
+        // เพิ่ม marker 3
+        var marker_a = L.marker([20.00000, 99.9900000], {
+            icon: createMarker("yellow")
+        }).addTo(map);
+
+        // popup
+        marker_a.bindPopup(
+            "<b>ชื่อสถานที่:</b> จุดตัวอย่าง ภาคเหนือ<br>" +
+            "<b>รายละเอียด:</b> พิกัด 20,99.99" +
+            "<img src='https://image-tc.galaxy.tf/wijpeg-sxrfid5inslt46adwg0pwpho/intanon_standard.jpg?crop=112%2C0%2C1777%2C1333' width='200'>"
+            
+        );
+
+         // เพิ่ม marker 4
+        var marker_a = L.marker([16.00000, 103.000000], {
+            icon: createMarker("green")
+        }).addTo(map);
+
+        // popup
+        marker_a.bindPopup(
+            "<b>ชื่อสถานที่:</b> จุดตัวอย่าง ภาคอีสาน <br>" +
+            "<b>รายละเอียด:</b> พิกัด 16,103" +
+            "<img src='https://www.unileverfoodsolutions.co.th/dam/global-ufs/mcos/SEA/calcmenu/recipes/TH-recipes/salads/%E0%B8%AA%E0%B9%89%E0%B8%A1%E0%B8%95%E0%B8%B3%E0%B9%84%E0%B8%97%E0%B8%A2/%E0%B8%AA%E0%B9%89%E0%B8%A1%E0%B8%95%E0%B8%B3%E0%B9%84%E0%B8%97%E0%B8%A2_header.jpg' width='200'>"
+        );
+
+         // เพิ่ม marker 5
+        var marker_a = L.marker([7.50000, 99.600000], {
+            icon: createMarker("black")
+        }).addTo(map);
+
+        // popup
+        marker_a.bindPopup(
+            "<b>ชื่อสถานที่:</b> จุดตัวอย่าง ภาคใต้ <br>" +
+            "<b>รายละเอียด:</b> พิกัด 7.5,99.6"+
+            "<img src='https://img.kapook.com/u/2018/sutasinee/05/p1_1.jpg' width='200'>"
+        );
+
+    </script>
+</body>
+
+</html>
